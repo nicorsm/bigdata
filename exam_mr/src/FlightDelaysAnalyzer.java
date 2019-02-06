@@ -20,6 +20,7 @@ import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Partitioner;
 import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
@@ -35,6 +36,7 @@ public class FlightDelaysAnalyzer {
 		job.setMapperClass(FlightDelaysMapper.class);
 		job.setCombinerClass(FlightDelaysCombiner.class);
 		job.setReducerClass(FlightDelaysReducer.class);
+		job.setPartitionerClass(FlightDelaysPartitioner.class);
 
 		if(args.length>2){
 			if(Integer.parseInt(args[2])>=0){
@@ -132,6 +134,20 @@ public class FlightDelaysAnalyzer {
 			for(String k : map.keySet()) {
 				context.write(key, new Text(k + "," + map.get(k)));
 			}
+		}
+		
+	}
+	
+	public static class FlightDelaysPartitioner extends Partitioner<IntWritable,Text> {
+
+		@Override
+		public int getPartition(IntWritable key, Text value, int numReduceTasks) {
+			
+			if(numReduceTasks == 0) {
+				return 0;
+			}
+			
+			return key.get() % numReduceTasks;
 		}
 		
 	}
