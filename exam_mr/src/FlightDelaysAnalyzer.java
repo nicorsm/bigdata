@@ -1,6 +1,13 @@
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
@@ -26,7 +33,7 @@ public class FlightDelaysAnalyzer {
 		job.setJarByClass(FlightDelaysAnalyzer.class);
 		
 		job.setMapperClass(FlightDelaysMapper.class);
-		job.setCombinerClass(FlightDelaysReducer.class);
+		//job.setCombinerClass(FlightDelaysReducer.class);
 		job.setReducerClass(FlightDelaysReducer.class);
 
 		if(args.length>2){
@@ -38,8 +45,8 @@ public class FlightDelaysAnalyzer {
 			job.setNumReduceTasks(1);
 		}
 		
-		job.setOutputKeyClass(Text.class);
-		job.setOutputValueClass(IntWritable.class);
+		job.setOutputKeyClass(IntWritable.class);
+		job.setOutputValueClass(Text.class);
 		
 		FileInputFormat.addInputPath(job, new Path(args[0]));
 		FileOutputFormat.setOutputPath(job, new Path(args[1]));
@@ -47,15 +54,16 @@ public class FlightDelaysAnalyzer {
 		System.exit(job.waitForCompletion(true) ? 0 : 1);
 	}
 	
-	public static class FlightDelaysMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+	public static class FlightDelaysMapper extends Mapper<LongWritable, Text, IntWritable, Text> {
 
 		private final static int DELAY = 14; //"ArrDelay";
 		private final static int CARRIER = 8; // "UniqueCarrier";
 		private final static int MONTH = 1; //"Month";
 		private final static IntWritable month = new IntWritable();
 		private final static Text carrier = new Text();
-		private final static Text monthCarrier = new Text();
-		private final static IntWritable delay = new IntWritable();
+		//private final static Text monthCarrier = new Text();
+		//private final static IntWritable delay = new IntWritable();
+		private final static Text data = new Text();
 		
 		public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
 			String[] tokens = value.toString().split(",");
@@ -63,32 +71,50 @@ public class FlightDelaysAnalyzer {
 			if (key.get() > 0) {
 				String originalDelay = tokens[DELAY];
 				
+				int delay = 0;
 				if(StringUtils.isNumeric(originalDelay)) {
-					delay.set(Integer.parseInt(originalDelay));
-				} else {
-					delay.set(0);
+					delay = Integer.parseInt(originalDelay);
 				}
 
-				int month = Integer.parseInt(tokens[MONTH]);
-				
-				monthCarrier.set(String.format("%02d,%s", month, tokens[CARRIER]));
-				context.write(monthCarrier, delay);
+				month.set(Integer.parseInt(tokens[MONTH]));
+				data.set(tokens[CARRIER] + "," + delay);
+				context.write(month, data);
 			}
 		}			
 	}
 	
-	public static class FlightDelaysReducer extends Reducer<Text,IntWritable,Text,IntWritable> {
-		private IntWritable result = new IntWritable();
+	public static class FlightDelaysReducer extends Reducer<IntWritable,Text,IntWritable,Text> {
 
-		public void reduce(Text key, Iterable<IntWritable> values,
+		public void reduce(IntWritable key, Iterable<Text> values,
 				Context context
 				) throws IOException, InterruptedException {
-			int sum = 0;
-			for (IntWritable val : values) {
-				sum += val.get();
+			
+			Map<String,Integer> map = new HashMap<String,Integer>();
+			
+			for(Text t: values) {
+				String[] tokens = t.toString().split(",");
+				String carrier = tokens[0];
+				int delay = Integer.parseInt(tokens[1]);
+				int currentDelay = 0;
+				
+				if(map.containsKey(carrier)) {
+					currentDelay = map.get(carrier);
+				}
+
+				map.put(carrier, delay + currentDelay);
 			}
-			result.set(sum);
-			context.write(key, result);
+			
+			List<Entry<String, Integer>> entryList = new ArrayList<Entry<String, Integer>>(map.entrySet());
+			Collections.sort(entryList, new Comparator<Entry<String, Integer>>(){
+			    @Override
+			    public int compare(Entry<String, Integer> e1, Entry<String, Integer> e2) {
+			        return e2.getValue() - e1.getValue(); // descending order
+			    }
+			});
+			
+			for(int i = 0; i < 3; i++) {
+				context.write(key, new Text(entryList.get(i).getKey()));
+			}
 		}
 	}
 }
