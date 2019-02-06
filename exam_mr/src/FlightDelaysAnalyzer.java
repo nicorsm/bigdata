@@ -33,7 +33,7 @@ public class FlightDelaysAnalyzer {
 		job.setJarByClass(FlightDelaysAnalyzer.class);
 		
 		job.setMapperClass(FlightDelaysMapper.class);
-		//job.setCombinerClass(FlightDelaysReducer.class);
+		job.setCombinerClass(FlightDelaysCombiner.class);
 		job.setReducerClass(FlightDelaysReducer.class);
 
 		if(args.length>2){
@@ -60,9 +60,6 @@ public class FlightDelaysAnalyzer {
 		private final static int CARRIER = 8; // "UniqueCarrier";
 		private final static int MONTH = 1; //"Month";
 		private final static IntWritable month = new IntWritable();
-		private final static Text carrier = new Text();
-		//private final static Text monthCarrier = new Text();
-		//private final static IntWritable delay = new IntWritable();
 		private final static Text data = new Text();
 		
 		public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
@@ -85,10 +82,8 @@ public class FlightDelaysAnalyzer {
 	
 	public static class FlightDelaysReducer extends Reducer<IntWritable,Text,IntWritable,Text> {
 
-		public void reduce(IntWritable key, Iterable<Text> values,
-				Context context
-				) throws IOException, InterruptedException {
-			
+		public static Map<String,Integer> accumulateDelays(Iterable<Text> values) {
+
 			Map<String,Integer> map = new HashMap<String,Integer>();
 			
 			for(Text t: values) {
@@ -104,6 +99,15 @@ public class FlightDelaysAnalyzer {
 				map.put(carrier, delay + currentDelay);
 			}
 			
+			return map;
+		}
+		
+		public void reduce(IntWritable key, Iterable<Text> values,
+				Context context
+				) throws IOException, InterruptedException {
+
+			Map<String,Integer> map = accumulateDelays(values);
+			
 			List<Entry<String, Integer>> entryList = new ArrayList<Entry<String, Integer>>(map.entrySet());
 			Collections.sort(entryList, new Comparator<Entry<String, Integer>>(){
 			    @Override
@@ -112,9 +116,23 @@ public class FlightDelaysAnalyzer {
 			    }
 			});
 			
-			for(int i = 0; i < 3; i++) {
+			int idx = entryList.size() < 3 ? entryList.size() : 3;
+			for(int i = 0; i < idx; i++) {
 				context.write(key, new Text(entryList.get(i).getKey()));
 			}
 		}
+	}
+	
+	public static class FlightDelaysCombiner extends Reducer<IntWritable,Text,IntWritable,Text> {
+
+		public void reduce(IntWritable key, Iterable<Text> values,
+				Context context
+				) throws IOException, InterruptedException {
+			Map<String,Integer> map = FlightDelaysReducer.accumulateDelays(values);
+			for(String k : map.keySet()) {
+				context.write(key, new Text(k + "," + map.get(k)));
+			}
+		}
+		
 	}
 }
