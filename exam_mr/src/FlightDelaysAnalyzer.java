@@ -33,23 +33,26 @@ public class FlightDelaysAnalyzer {
 		Job job = Job.getInstance(conf, "Flight Delays Analyzer");
 		job.setJarByClass(FlightDelaysAnalyzer.class);
 		
+		// Set mapper, combiner, partitioner and reducer class
 		job.setMapperClass(FlightDelaysMapper.class);
 		job.setCombinerClass(FlightDelaysCombiner.class);
 		job.setReducerClass(FlightDelaysReducer.class);
 		job.setPartitionerClass(FlightDelaysPartitioner.class);
 
-		if(args.length>2){
+		// Set number of reduce tasks (1 if not specified)
+		if (args.length>2) {
 			if(Integer.parseInt(args[2])>=0){
 				job.setNumReduceTasks(Integer.parseInt(args[2]));
 			}
-		}
-		else{
+		} else {
 			job.setNumReduceTasks(1);
 		}
 		
+		// Set output kv classes: Int (# month) and Text (carrier code) e.g. 1	AA
 		job.setOutputKeyClass(IntWritable.class);
 		job.setOutputValueClass(Text.class);
 		
+		// Set input and output paths
 		FileInputFormat.addInputPath(job, new Path(args[0]));
 		FileOutputFormat.setOutputPath(job, new Path(args[1]));
 		
@@ -58,9 +61,11 @@ public class FlightDelaysAnalyzer {
 	
 	public static class FlightDelaysMapper extends Mapper<LongWritable, Text, IntWritable, Text> {
 
-		private final static int DELAY = 14; //"ArrDelay";
-		private final static int CARRIER = 8; // "UniqueCarrier";
-		private final static int MONTH = 1; //"Month";
+		// Indexes of columns for mapping
+		private final static int DELAY = 14;	// "ArrDelay"
+		private final static int CARRIER = 8;	// "UniqueCarrier"
+		private final static int MONTH = 1;		// "Month"
+		
 		private final static IntWritable month = new IntWritable();
 		private final static Text data = new Text();
 		
@@ -72,9 +77,11 @@ public class FlightDelaysAnalyzer {
 				
 				int delay = 0;
 				if(StringUtils.isNumeric(originalDelay)) {
+					// Parse value only if is numeric, otherwise put 0
 					delay = Integer.parseInt(originalDelay);
 				}
 
+				// Set month as key and carrier + delay as value, in a format "carrier,delay" (e.g. "AA,5")
 				month.set(Integer.parseInt(tokens[MONTH]));
 				data.set(tokens[CARRIER] + "," + delay);
 				context.write(month, data);
@@ -82,51 +89,12 @@ public class FlightDelaysAnalyzer {
 		}			
 	}
 	
-	public static class FlightDelaysReducer extends Reducer<IntWritable,Text,IntWritable,Text> {
-
-		public static Map<String,Integer> accumulateDelays(Iterable<Text> values) {
-
-			Map<String,Integer> map = new HashMap<String,Integer>();
-			
-			for(Text t: values) {
-				String[] tokens = t.toString().split(",");
-				String carrier = tokens[0];
-				int delay = Integer.parseInt(tokens[1]);
-				int currentDelay = 0;
-				
-				if(map.containsKey(carrier)) {
-					currentDelay = map.get(carrier);
-				}
-
-				map.put(carrier, delay + currentDelay);
-			}
-			
-			return map;
-		}
-		
-		public void reduce(IntWritable key, Iterable<Text> values,
-				Context context
-				) throws IOException, InterruptedException {
-
-			Map<String,Integer> map = accumulateDelays(values);
-			
-			List<Entry<String, Integer>> entryList = new ArrayList<Entry<String, Integer>>(map.entrySet());
-			Collections.sort(entryList, new Comparator<Entry<String, Integer>>(){
-			    @Override
-			    public int compare(Entry<String, Integer> e1, Entry<String, Integer> e2) {
-			        return e2.getValue() - e1.getValue(); // descending order
-			    }
-			});
-			
-			int idx = entryList.size() < 3 ? entryList.size() : 3;
-			for(int i = 0; i < idx; i++) {
-				context.write(key, new Text(entryList.get(i).getKey()));
-			}
-		}
-	}
-	
 	public static class FlightDelaysCombiner extends Reducer<IntWritable,Text,IntWritable,Text> {
 
+		// This combiner is a simple version of the reducer.
+		// It just pre-cumulate delays for the current key, 
+		// so the output will be less kv-pairs with cumulated delays (e.g. "8	AA,5332")
+		// instead of kv-pairs for each flight (e.g. "8		AA,5")
 		public void reduce(IntWritable key, Iterable<Text> values,
 				Context context
 				) throws IOException, InterruptedException {
@@ -138,6 +106,62 @@ public class FlightDelaysAnalyzer {
 		
 	}
 	
+	public static class FlightDelaysReducer extends Reducer<IntWritable,Text,IntWritable,Text> {
+
+		// A common function for reducer and combiner that computes
+		// the total amount of delay for the given values.
+
+		public static Map<String,Integer> accumulateDelays(Iterable<Text> values) {
+
+			Map<String,Integer> map = new HashMap<String,Integer>();
+			
+			for(Text t: values) {
+				// Values are coming from the mapper in a "carrier,delay" format
+				String[] tokens = t.toString().split(",");
+				String carrier = tokens[0];
+				int delay = Integer.parseInt(tokens[1]);
+				int currentDelay = 0;
+				
+				// If the map already contains the carrier, cumulate that delay
+				if(map.containsKey(carrier)) {
+					currentDelay = map.get(carrier);
+				}
+
+				// Store the updated delay for the carrier
+				map.put(carrier, delay + currentDelay);
+			}
+			
+			return map;
+		}
+		
+		public void reduce(IntWritable key, Iterable<Text> values,
+				Context context
+				) throws IOException, InterruptedException {
+
+			// Compute delays for the current keys
+			Map<String,Integer> map = accumulateDelays(values);
+			
+			// Sort the delays map by values
+			List<Entry<String, Integer>> entryList = new ArrayList<Entry<String, Integer>>(map.entrySet());
+			Collections.sort(entryList, new Comparator<Entry<String, Integer>>(){
+			    @Override
+			    public int compare(Entry<String, Integer> e1, Entry<String, Integer> e2) {
+			        return e2.getValue() - e1.getValue(); // descending order (higher first)
+			    }
+			});
+			
+			// Take the top 3 (or less) carriers and write the output kv-pair as "month		carrier". E.g.:
+			// 8	WN (1st)
+			// 8	AA (2nd)
+			// 8	UA (3rd)
+			int top = Math.min(entryList.size(), 3);
+			for(int i = 0; i < top; i++) {
+				Entry<String,Integer> entry = entryList.get(i);
+				context.write(key, new Text(entry.getKey() + " - " + entry.getValue() + " min."));
+			}
+		}
+	}
+	
 	public static class FlightDelaysPartitioner extends Partitioner<IntWritable,Text> {
 
 		@Override
@@ -147,6 +171,7 @@ public class FlightDelaysAnalyzer {
 				return 0;
 			}
 			
+			// Partition by months (key = # of month)
 			return key.get() % numReduceTasks;
 		}
 		
