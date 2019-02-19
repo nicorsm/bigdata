@@ -6,13 +6,17 @@ case class FlightData(month: Integer, departure: Integer, arrival: Integer, orig
 val sunset = 2100
 val sunrise = 600
 val na = 1200
+def isNumber(x: String) = x forall Character.isDigit
 
-val rddFlights = spark.read.format("csv").option("header", "true").load("hdfs:/user/ngiancecchi/dataset/2007.csv").rdd.map { x => 
-	val depString = x.getInt(4)
-	val arrString = x.getInt(6)
-	val departure = if(depString == "NA") na else depString.toInt
-	val arrival = if(arrString == "NA") na else arrString.toInt
-	FlightData(x.getInt(1),departure,arrival,x.getString(16),x.getString(17))
+//Original path hdfs:/user/ngiancecchi/dataset/2007.csv
+
+val rddFlights = spark.read.format("csv").option("header", "true").load("hdfs://localhost:8020/user/cloudera/dataset/2007.csv").rdd.map { x => 
+	val month = x.getString(1).toInt
+	val depString = x.getString(4)
+	val arrString = x.getString(6)
+	val departure = if(isNumber(depString)) depString.toInt else na
+	val arrival = if(isNumber(arrString)) arrString.toInt else na
+	FlightData(month,departure,arrival,x.getString(16),x.getString(17))
 }
 
 // Number of movements are considered as the sum of landings and takeoffs to/from an airport,
@@ -39,16 +43,25 @@ val arrivals = arrAfterSunset.union(arrBeforeSunrise).map(x => (x.destination, 1
 // Take the first 10 airports in the rank and print out on screen.
 val flights = departures.union(arrivals).reduceByKey(_ + _)
 
-//val rddAirports = sc.textFile("hdfs:/user/ngiancecchi/dataset/airports.csv")  // Loads data from HDFS
-val airports = spark.read.format("csv").option("header", "true").load("hdfs:/user/ngiancecchi/dataset/airports.csv").rdd.map(x => (x.getString(0), x.getString(1)))
+
+val airports = spark.read.format("csv").option("header", "true").load("hdfs://localhost:8020/user/cloudera/dataset/airports.csv").rdd.map(x => (x.getString(0), x.getString(1)))
+
 //
 // Filters just the data we need: the month, departure and arrival times and airports
 // Times are in a integer format (e.g. "950" for 9:50, "2310" for 23:10), so we can simply consider them as integer.
-flights.join(airports).takeOrdered(10)(Ordering[Int].reverse.on(x=>x._2._1)).foreach(println)
 
-//results.foreach(println)
-//results.saveAsTextFile("hdfs:/user/ngiancecchi/exam/results.txt")
+val results = flights.join(airports).takeOrdered(10)(Ordering[Int].reverse.on(x=>x._2._1))
+val output = Array[String]()
+results.foreach { x =>
+	println(x)
+	output :+ x
+}
 
-//list.take(10).join(rddAirports).foreach(println)
+import java.io.{File, PrintWriter}
+val pw = new PrintWriter(new File("exrdd-output"))
+pw.write(output.mkString("\n"))
+pw.close()
 
-//uso di repartition e coalesce + persistenza della cache
+///list.join(rddAirports).take(10).foreach(println)
+///uso di repartition e coalesce + persistenza della cache
+
