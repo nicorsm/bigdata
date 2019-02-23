@@ -1,0 +1,4 @@
+hadoop jar /home/ngiancecchi/exam/exam.jar FlightDelaysAnalyzer /user/ngiancecchi/dataset/2007.csv /user/ngiancecchi/ds01
+
+spark2-shell
+:load /home/ngiancecchi/exam/exsql.scala
